@@ -117,12 +117,17 @@ class CongestionWindowPredictor:
         rtt = df['rtt_ms'].values
         loss = df['loss'].values
 
+        # η(t-1) = goodput(t) - α·RTT(t) - β·loss(t)
+        # The weight for sample at t-1 is the outcome observed at t (one step ahead).
+        # Shift objective forward by 1 so weight[i] = η evaluated at i+1.
         objective = goodput - self.alpha * rtt - self.beta * loss
+        shifted = np.empty_like(objective)
+        shifted[:-1] = objective[1:]   # weight[t-1] ← outcome at t
+        shifted[-1]  = objective[-1]   # last sample has no future; use own value
 
-        # Normalize objective to positive weights
-        # Higher objective = better outcome = higher weight
-        weights = objective - objective.min() + 1.0  # Shift to positive
-        weights = weights / weights.mean()  # Normalize
+        # Normalize to positive weights
+        weights = shifted - shifted.min() + 1.0
+        weights = weights / weights.mean()
 
         return X, y, weights
 
@@ -326,123 +331,229 @@ class CongestionWindowPredictor:
 
     def extract_algorithm(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> str:
         """
-        Extract a hand-written algorithm based on model behavior and principles.
+        Extract a hand-written algorithm derived from the actual fitted model.
+        For linear models: reads real coefficients and builds the update rule.
+        For tree models: uses feature importances + data quantiles to derive thresholds.
 
         Args:
             train_df: Training data
             test_df: Test data
 
         Returns:
-            String describing the algorithm
+            String describing the algorithm grounded in actual model observations.
         """
-        # Analyze feature importance
-        feature_importance = self.get_feature_importance()
+        df = pd.concat([train_df, test_df], ignore_index=True)
 
-        # Analyze correlations
-        df_combined = pd.concat([train_df, test_df])
-        correlations = df_combined[['snd_cwnd', 'goodput_mbps', 'rtt_ms', 'loss']].corr()
+        # ── Data statistics ──────────────────────────────────────────────
+        rtt_min    = df['rtt_ms'].quantile(0.05)   # near-min RTT ≈ propagation delay
+        rtt_med    = df['rtt_ms'].median()
+        rtt_p75    = df['rtt_ms'].quantile(0.75)
+        cwnd_med   = df['snd_cwnd'].median()
+        cwnd_p75   = df['snd_cwnd'].quantile(0.75)
+        gp_med     = df['goodput_mbps'].median()
+        loss_p75   = df['loss'].quantile(0.75)
+        mss_bytes  = 1448  # typical MSS
 
-        # Compute statistics
-        avg_cwnd_when_good = df_combined[df_combined['goodput_mbps'] > df_combined['goodput_mbps'].quantile(0.75)]['snd_cwnd'].mean()
-        avg_cwnd_when_bad = df_combined[df_combined['goodput_mbps'] < df_combined['goodput_mbps'].quantile(0.25)]['snd_cwnd'].mean()
+        # BDP estimate: how many packets should fill the pipe
+        bdp_packets = max(1.0, (gp_med * 1e6 / 8) * (rtt_med / 1000.0) / mss_bytes)
 
-        avg_rtt_when_good = df_combined[df_combined['goodput_mbps'] > df_combined['goodput_mbps'].quantile(0.75)]['rtt_ms'].mean()
-        avg_rtt_when_bad = df_combined[df_combined['goodput_mbps'] < df_combined['goodput_mbps'].quantile(0.25)]['rtt_ms'].mean()
+        # Correlation of each feature with goodput
+        corr_cwnd = df['snd_cwnd'].corr(df['goodput_mbps'])
+        corr_rtt  = df['rtt_ms'].corr(df['goodput_mbps'])
+        corr_loss = df['loss'].corr(df['goodput_mbps'])
 
-        algorithm = f"""
-CONGESTION WINDOW UPDATE ALGORITHM
-(Extracted from ML Model Observations)
+        # ── Model-derived update rule ─────────────────────────────────────
+        if hasattr(self.model, 'coef_') and self.feature_columns:
+            # Linear / Ridge: the learned equation IS the algorithm
+            coefs    = self.model.coef_
+            intercept = float(self.model.intercept_)
 
-Parameters:
-- α (RTT penalty weight): {self.alpha}
-- β (Loss penalty weight): {self.beta}
+            # Build the exact learned equation string
+            terms = [f"({coefs[i]:+.5f} × {col})"
+                     for i, col in enumerate(self.feature_columns)]
+            learned_eq = f"  delta_cwnd = {intercept:+.5f}\n"
+            learned_eq += "\n".join(f"            {t}" for t in terms)
 
-Key Observations from Data:
-1. Feature Importance (Top 3):
-{feature_importance.head(3).to_string(index=False) if len(feature_importance) > 0 else "N/A"}
+            # Rank features by absolute coefficient magnitude
+            ranked = sorted(zip(self.feature_columns, coefs),
+                            key=lambda x: abs(x[1]), reverse=True)
+            top3 = ranked[:3]
 
-2. Performance Characteristics:
-   - Average cwnd when goodput is high (>75th percentile): {avg_cwnd_when_good:.1f} packets
-   - Average cwnd when goodput is low (<25th percentile): {avg_cwnd_when_bad:.1f} packets
-   - Average RTT when goodput is high: {avg_rtt_when_good:.2f} ms
-   - Average RTT when goodput is low: {avg_rtt_when_bad:.2f} ms
+            # Interpret dominant features in network terms
+            interpretations = []
+            for feat, w in top3:
+                sign = "increases" if w > 0 else "decreases"
+                if 'cwnd' in feat:
+                    interpretations.append(
+                        f"  • {feat} (coef={w:+.5f}): cwnd has strong momentum — "
+                        f"the model is autoregressive. A {feat} ↑ {sign} delta_cwnd. "
+                        f"This reflects the BDP principle: if the pipe was full last interval "
+                        f"it likely remains full.")
+                elif 'rtt' in feat:
+                    interpretations.append(
+                        f"  • {feat} (coef={w:+.5f}): rising RTT {sign} delta_cwnd. "
+                        f"RTT increase signals queue build-up (queueing delay = RTT − RTT_min). "
+                        f"The model learned to {'grow' if w > 0 else 'shrink'} cwnd when RTT rises.")
+                elif 'goodput' in feat:
+                    interpretations.append(
+                        f"  • {feat} (coef={w:+.5f}): higher goodput {sign} delta_cwnd. "
+                        f"Goodput ≈ cwnd × MSS / RTT (BDP relation), so goodput rising "
+                        f"implies the network can absorb more and cwnd should "
+                        f"{'grow' if w > 0 else 'shrink'}.")
+                elif 'loss' in feat:
+                    interpretations.append(
+                        f"  • {feat} (coef={w:+.5f}): loss {sign} delta_cwnd. "
+                        f"Loss signals buffer overflow; the model {'increases' if w > 0 else 'decreases'} "
+                        f"cwnd in response — {'counter-intuitive, may reflect recovery bursts' if w > 0 else 'consistent with AIMD decrease'}.")
+                else:
+                    interpretations.append(
+                        f"  • {feat} (coef={w:+.5f}): {sign} delta_cwnd.")
 
-3. Correlation with Goodput:
-   - Cwnd correlation: {correlations.loc['snd_cwnd', 'goodput_mbps']:.3f}
-   - RTT correlation: {correlations.loc['rtt_ms', 'goodput_mbps']:.3f}
-   - Loss correlation: {correlations.loc['loss', 'goodput_mbps']:.3f}
+            interp_str = "\n".join(interpretations)
 
-PROPOSED HAND-WRITTEN ALGORITHM:
+            # Simplified hand-written rule derived from top coefficients
+            top_feat, top_w = top3[0]
+            second_feat, second_w = top3[1] if len(top3) > 1 else (None, 0)
+            third_feat, third_w  = top3[2] if len(top3) > 2 else (None, 0)
 
-Algorithm: Adaptive Congestion Window Control
--------------------------------------------
+            # RTT-based queueing threshold from data
+            queue_thresh = rtt_p75  # if RTT exceeds 75th pctile, assume queueing
 
+            handwritten = f"""
+Simplified Hand-Written Algorithm (derived from model observations)
+-------------------------------------------------------------------
 State:
-  cwnd: current congestion window (packets)
-  ssthresh: slow start threshold
-  rtt: smoothed round-trip time (ms)
-  rtt_min: minimum observed RTT (baseline)
-  loss_detected: boolean indicating packet loss
-  goodput: measured application throughput (Mbps)
+  cwnd      — current congestion window (packets)
+  cwnd_prev — cwnd from previous interval
+  rtt       — current smoothed RTT (ms)
+  rtt_min   — minimum observed RTT = {rtt_min:.2f} ms  (propagation baseline)
+  goodput   — measured throughput (Mbps)
+  loss      — cumulative retransmit/loss counter
 
-Initialization:
-  cwnd = 10  # initial window
-  ssthresh = 65535  # large value
-  rtt_min = ∞
+Thresholds (from data percentiles this run):
+  QUEUE_THRESH = {queue_thresh:.2f} ms   (RTT 75th pctile — queueing likely above this)
+  BDP_TARGET   = {bdp_packets:.1f} packets (goodput={gp_med:.2f} Mbps × RTT={rtt_med:.2f} ms / MSS)
+  LOSS_THRESH  = {loss_p75:.1f}          (loss 75th pctile)
 
-On each RTT:
-  1. Update RTT measurements:
-     rtt_min = min(rtt_min, rtt)
-     queue_delay = rtt - rtt_min
+Per-interval update rule:
 
-  2. Compute objective function:
-     η = goodput - α * rtt - β * loss_count
+  queue_delay = rtt - rtt_min          # isolate queueing component
 
-  3. Detect congestion signals:
-     loss_congestion = (loss_detected == true)
-     delay_congestion = (queue_delay > 2 * rtt_min)  # significant queueing
+  # Step 1 — loss event: hard multiplicative decrease (AIMD)
+  if loss > LOSS_THRESH:
+    cwnd = max(2, cwnd × 0.5)
 
-  4. Update cwnd based on state:
+  # Step 2 — queue building: gentle delay-based decrease (Vegas-like)
+  elif queue_delay > (rtt_min × {(queue_thresh / max(rtt_min, 0.001)):.2f}):
+    cwnd = max(2, cwnd - 1)
 
-     If loss_congestion:
-       # Multiplicative decrease on loss
-       ssthresh = max(cwnd / 2, 2)
-       cwnd = ssthresh
+  # Step 3 — pipe under-utilized: probe upward
+  elif cwnd < BDP_TARGET × 0.9:
+    cwnd = cwnd + 1                    # additive increase toward BDP
 
-     Else if delay_congestion AND cwnd > ssthresh:
-       # Gentle decrease on delay increase (Vegas-like)
-       cwnd = cwnd - 1
+  # Step 4 — near BDP capacity: modulate by model's dominant signal
+  else:
+    # Primary driver: {top_feat} (coef={top_w:+.5f})
+    delta = {top_w:.5f} × {top_feat}"""
 
-     Else if cwnd < ssthresh:
-       # Slow start: exponential increase
-       cwnd = cwnd + 1  (per ACK: cwnd += 1/cwnd)
+            if second_feat:
+                handwritten += f"\n          # Secondary: {second_feat} (coef={second_w:+.5f})"
+                handwritten += f"\n          delta += {second_w:.5f} × {second_feat}"
+            if third_feat:
+                handwritten += f"\n          # Tertiary: {third_feat} (coef={third_w:+.5f})"
+                handwritten += f"\n          delta += {third_w:.5f} × {third_feat}"
 
-     Else:
-       # Congestion avoidance: linear increase
-       # But modulate based on objective function
-       if η > η_prev AND goodput_increasing:
-         cwnd = cwnd + 1/cwnd  # standard AIMD increase
-       else if η < η_prev * 0.9:  # objective degrading
-         cwnd = cwnd - 0.5/cwnd  # slight decrease
-       else:
-         cwnd = cwnd + 0.5/cwnd  # cautious increase
+            handwritten += f"""
+    cwnd = max(2, cwnd + delta)
 
-  5. Bounds:
-     cwnd = max(2, min(cwnd, 65535))
-
-Key Principles:
-- Use AIMD (Additive Increase Multiplicative Decrease) as baseline
-- React to both loss (explicit congestion) and delay (implicit congestion)
-- Modulate increase rate based on objective function η
-- Balance between goodput maximization and latency/loss minimization
-- Maintain minimum cwnd to avoid stalling
-
-This algorithm combines:
-1. Classic TCP congestion control (AIMD, slow start)
-2. Delay-based congestion detection (TCP Vegas-like)
-3. Objective-driven adaptation (ML-inspired)
+  # Step 5 — bounds
+  cwnd = max(2, min(cwnd, 65535))
 """
 
+        else:
+            # Tree-based: derive top3 from feature importances
+            fi = self.get_feature_importance()
+            if len(fi) >= 3:
+                top3 = list(zip(fi['feature'].tolist(), fi['importance'].tolist()))[:3]
+            elif len(fi) > 0:
+                top3 = list(zip(fi['feature'].tolist(), fi['importance'].tolist()))
+            else:
+                top3 = [('unknown', 0.0)]
+
+            top_feat, top_imp = top3[0]
+            interp_lines = []
+            for feat, imp in top3:
+                interp_lines.append(f"  • {feat} (importance={imp:.5f}): drives cwnd decisions most.")
+            interp_str = "\n".join(interp_lines)
+            learned_eq = "  (tree-based model — no closed-form equation; see feature importances above)"
+            handwritten = f"""
+Simplified Hand-Written Algorithm (tree model, importance-derived)
+-------------------------------------------------------------------
+  queue_delay = rtt - rtt_min
+
+  if loss > {loss_p75:.1f}:                  cwnd = max(2, cwnd × 0.5)
+  elif queue_delay > rtt_min × {(rtt_p75 / max(rtt_min, 0.001)):.2f}:  cwnd = max(2, cwnd - 1)
+  elif cwnd < {bdp_packets:.1f}:              cwnd = cwnd + 1
+  else:                                   cwnd = cwnd + 0.5 / cwnd
+  cwnd = max(2, min(cwnd, 65535))
+
+  # Top signal: {top_feat} (importance={top_imp:.5f})
+"""
+
+        # ── Always-safe reference to top3[0] for final summary ───────────
+        top_label   = top3[0][0]
+        top_val     = top3[0][1]
+
+        # ── Final report ─────────────────────────────────────────────────
+        algorithm = f"""
+CONGESTION WINDOW UPDATE ALGORITHM
+(Dynamically extracted from fitted {self.model_type} model — this run)
+
+Objective function used during training:
+  η(t-1) = goodput(t) − {self.alpha}·RTT(t) − {self.beta}·loss(t)
+  Weight for sample at t-1 is the observed outcome at t (one-step-ahead evaluation).
+  Samples are upweighted when the NEXT interval has high goodput and low RTT/loss.
+
+═══════════════════════════════════════════════════════════════════
+SECTION 1 — LEARNED MODEL EQUATION
+═══════════════════════════════════════════════════════════════════
+{learned_eq}
+
+═══════════════════════════════════════════════════════════════════
+SECTION 2 — DATA OBSERVATIONS (this run)
+═══════════════════════════════════════════════════════════════════
+  RTT:     min={rtt_min:.2f} ms  median={rtt_med:.2f} ms  p75={rtt_p75:.2f} ms
+  cwnd:    median={cwnd_med:.1f} pkts  p75={cwnd_p75:.1f} pkts
+  goodput: median={gp_med:.2f} Mbps
+  BDP estimate: {bdp_packets:.1f} packets
+    (= goodput × RTT / MSS — the ideal cwnd to saturate the pipe without queueing)
+
+  Pearson correlation with goodput:
+    cwnd ↔ goodput: {corr_cwnd:+.3f}   (positive → larger cwnd → more throughput, confirms BDP)
+    RTT  ↔ goodput: {corr_rtt:+.3f}   (negative expected → RTT rise signals queue build-up)
+    loss ↔ goodput: {corr_loss:+.3f}   (negative expected → loss → buffer overflow, throughput drop)
+
+═══════════════════════════════════════════════════════════════════
+SECTION 3 — DOMINANT FEATURES & NETWORK INTERPRETATION
+═══════════════════════════════════════════════════════════════════
+{interp_str}
+
+═══════════════════════════════════════════════════════════════════
+SECTION 4 — HAND-WRITTEN ALGORITHM
+(suitable for kernel/eBPF implementation — all thresholds from this run's data)
+═══════════════════════════════════════════════════════════════════
+{handwritten}
+Key principles grounded in this run's observations:
+  1. BDP target = {bdp_packets:.1f} pkts (bandwidth={gp_med:.2f} Mbps × RTT={rtt_med:.2f} ms / MSS=1448B).
+     Cwnd below BDP leaves bandwidth unused. Cwnd above BDP fills router queues → RTT rises.
+  2. RTT_min = {rtt_min:.2f} ms is the pure propagation delay (5th pctile this run).
+     queue_delay = RTT − RTT_min isolates the queueing component without loss signals.
+  3. LOSS_THRESH = {loss_p75:.1f} (75th pctile of loss counter). Above this the buffer is
+     overflowing → multiplicative halving (AIMD) is the correct response.
+  4. Dominant learned signal: {top_label} = {top_val:+.5f}.
+     This is what the model weighted most heavily when deciding how to update cwnd.
+     Implement this term first in any eBPF/kernel hook.
+"""
         return algorithm
 
 
