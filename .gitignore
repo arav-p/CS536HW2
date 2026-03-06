@@ -13,7 +13,7 @@ build/
 # Output directories
 data/
 plots/
-
+*.tar
 # IDEs
 .vscode/
 .idea/
