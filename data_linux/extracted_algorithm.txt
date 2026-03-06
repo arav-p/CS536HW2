@@ -1,0 +1,95 @@
+
+CONGESTION WINDOW UPDATE ALGORITHM
+(Extracted from ML Model Observations)
+
+Parameters:
+- α (RTT penalty weight): 0.1
+- β (Loss penalty weight): 1.0
+
+Key Observations from Data:
+1. Feature Importance (Top 3):
+     feature  importance
+     rtt_ma3  430.498115
+      rtt_ms  342.925123
+goodput_mbps  174.254674
+
+2. Performance Characteristics:
+   - Average cwnd when goodput is high (>75th percentile): 3276.8 packets
+   - Average cwnd when goodput is low (<25th percentile): 1274.2 packets
+   - Average RTT when goodput is high: 71.29 ms
+   - Average RTT when goodput is low: 198.91 ms
+
+3. Correlation with Goodput:
+   - Cwnd correlation: 0.276
+   - RTT correlation: -0.637
+   - Loss correlation: -0.060
+
+PROPOSED HAND-WRITTEN ALGORITHM:
+
+Algorithm: Adaptive Congestion Window Control
+-------------------------------------------
+
+State:
+  cwnd: current congestion window (packets)
+  ssthresh: slow start threshold
+  rtt: smoothed round-trip time (ms)
+  rtt_min: minimum observed RTT (baseline)
+  loss_detected: boolean indicating packet loss
+  goodput: measured application throughput (Mbps)
+
+Initialization:
+  cwnd = 10  # initial window
+  ssthresh = 65535  # large value
+  rtt_min = ∞
+
+On each RTT:
+  1. Update RTT measurements:
+     rtt_min = min(rtt_min, rtt)
+     queue_delay = rtt - rtt_min
+
+  2. Compute objective function:
+     η = goodput - α * rtt - β * loss_count
+
+  3. Detect congestion signals:
+     loss_congestion = (loss_detected == true)
+     delay_congestion = (queue_delay > 2 * rtt_min)  # significant queueing
+
+  4. Update cwnd based on state:
+
+     If loss_congestion:
+       # Multiplicative decrease on loss
+       ssthresh = max(cwnd / 2, 2)
+       cwnd = ssthresh
+
+     Else if delay_congestion AND cwnd > ssthresh:
+       # Gentle decrease on delay increase (Vegas-like)
+       cwnd = cwnd - 1
+
+     Else if cwnd < ssthresh:
+       # Slow start: exponential increase
+       cwnd = cwnd + 1  (per ACK: cwnd += 1/cwnd)
+
+     Else:
+       # Congestion avoidance: linear increase
+       # But modulate based on objective function
+       if η > η_prev AND goodput_increasing:
+         cwnd = cwnd + 1/cwnd  # standard AIMD increase
+       else if η < η_prev * 0.9:  # objective degrading
+         cwnd = cwnd - 0.5/cwnd  # slight decrease
+       else:
+         cwnd = cwnd + 0.5/cwnd  # cautious increase
+
+  5. Bounds:
+     cwnd = max(2, min(cwnd, 65535))
+
+Key Principles:
+- Use AIMD (Additive Increase Multiplicative Decrease) as baseline
+- React to both loss (explicit congestion) and delay (implicit congestion)
+- Modulate increase rate based on objective function η
+- Balance between goodput maximization and latency/loss minimization
+- Maintain minimum cwnd to avoid stalling
+
+This algorithm combines:
+1. Classic TCP congestion control (AIMD, slow start)
+2. Delay-based congestion detection (TCP Vegas-like)
+3. Objective-driven adaptation (ML-inspired)

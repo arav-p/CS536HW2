@@ -415,10 +415,10 @@ class IPerf3Client:
                     'reordering': fields[28],
                 }
             else:
-                return {'platform': 'non-linux', 'note': 'TCP_INFO not available on this platform'}
+                raise RuntimeError("TCP_INFO not available. This application requires Linux (Ubuntu 22.04+) or WSL2.")
         except Exception as e:
             logger.debug(f"Could not get TCP_INFO: {e}")
-            return None
+            raise RuntimeError(f"Failed to get TCP_INFO: {e}. Ensure running on Linux with proper kernel support.")
 
     # ------------------------------------------------------------------
     # Low-level socket I/O

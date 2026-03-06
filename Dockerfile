@@ -19,9 +19,11 @@ COPY requirements.txt .
 # Install Python packages
 RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
-# Copy all source code
-COPY iperf_client.py .
-COPY tcp_stats.py .
+# Copy the rest of the application
+COPY . .
+
+# Set the default command
+CMD ["python3", "main.py", "--num-servers", "10", "--duration", "60", "--csv", "listed_iperf3_servers-2.csv"]
 COPY visualizations.py .
 COPY ml_model.py .
 COPY server_discovery.py .
@@ -33,6 +35,3 @@ RUN mkdir -p data plots
 
 # Make scripts executable
 RUN chmod +x main.py iperf_client.py
-
-# Default command: run main pipeline
-CMD ["python3", "main.py", "--csv", "listed_iperf3_servers-2.csv", "--num-servers", "10", "--duration", "60"]
