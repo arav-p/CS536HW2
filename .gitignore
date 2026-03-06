@@ -35,3 +35,23 @@ Thumbs.db
 
 # Logs
 *.log
+cs536hw2.tar
+*.tar
+data/
+data_linux/
+plots/
+plots_linux/
+__pycache__/
+*.pyc
+.venv/
+*.pkl
+cs536hw2.tar
+*.tar
+data/
+data_linux/
+plots/
+plots_linux/
+__pycache__/
+*.pyc
+.venv/
+*.pkl
