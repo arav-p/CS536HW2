@@ -1,0 +1,32 @@
+# Public iPerf3 Servers
+# Source: https://iperf3serverlist.net/
+# Format: host:port or just host (default port 5201)
+
+# US Servers
+iperf.he.net:5201
+bouygues.iperf.fr:5201
+ping.online.net:5201
+
+# European Servers
+iperf.scottlinux.com:5201
+speedtest.uztelecom.uz:5200
+iperf.biznetnetworks.com:5201
+
+# Asia-Pacific
+speedtest.wtnet.de:5200
+iperf3.moji.fr:5201
+speedtest.hostkey.ru:5200
+
+# Additional Servers
+iperf.par2.as49434.net:5200
+proof.ovh.net:5201
+iperf.it-north.net:5201
+speedtest.iveloz.net.br:5201
+speedtest1.net.its.ny.gov:5201
+iperf.zenlayer.com:5201
+
+# Backup servers
+iperf3.velocityonline.net:9200
+speedtest.wtnet.de:5201
+iperf.deic.dk:5201
+iperf.he.net:5200
