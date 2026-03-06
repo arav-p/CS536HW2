@@ -9,7 +9,7 @@ venv/
 *.egg-info/
 dist/
 build/
-
+*.pem
 # Output directories
 data/
 plots/
