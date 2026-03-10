@@ -159,9 +159,8 @@ def train_ml_model_part3(results_list: List[tuple], processor: TCPStatsProcessor
     train_df, test_df = processor.split_train_test(dataset, test_split=0.3)
     logger.info(f"Train: {len(train_df)} samples  |  Test: {len(test_df)} samples")
 
-    # FIX: gradient_boosting as default (better accuracy, no leakage risk)
     predictor = CongestionWindowPredictor(alpha=alpha, beta=beta,
-                                          model_type='gradient_boosting')
+                                          model_type='linear')
 
     train_metrics = predictor.train(train_df)
     logger.info(f"Training metrics: {train_metrics}")

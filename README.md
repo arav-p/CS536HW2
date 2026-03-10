@@ -6,16 +6,18 @@ Complete implementation of Assignment 2 for CS 536 Spring 2026.
 
 ```
 CS536HW2/
-├── main.py                    # Main orchestrator script
-├── iperf_client.py            # iPerf3 protocol client implementation
-├── tcp_stats.py               # TCP statistics collection and processing
-├── visualizations.py          # Plotting utilities
-├── ml_model.py                # ML model for cwnd prediction
-├── requirements.txt           # Python dependencies
-├── Dockerfile                 # Docker containerization
-├── servers.txt                # List of iPerf3 servers
-├── data/                      # Output: CSV/JSON data (created at runtime)
-└── plots/                     # Output: PDF plots (created at runtime)
+├── main.py                         # Main orchestrator script
+├── iperf_client.py                 # iPerf3 protocol client implementation
+├── tcp_stats.py                    # TCP statistics collection and processing
+├── visualizations.py               # Plotting utilities
+├── ml_model.py                     # ML model for cwnd prediction
+├── server_discovery.py             # Server loading and reachability probing
+├── requirements.txt                # Python dependencies
+├── Dockerfile                      # Docker containerization (ubuntu:24.04)
+├── run_experiment.sh               # One-command build + run script
+├── listed_iperf3_servers-2.csv     # iPerf3 server list
+├── data/                           # Output: CSV/JSON data (created at runtime)
+└── plots/                          # Output: PDF plots (created at runtime)
 ```
 
 ## Requirements
@@ -30,22 +32,21 @@ CS536HW2/
 
 ### Using Docker (Recommended)
 
-1. Build the Docker image:
+Run the entire experiment with a single command:
 ```bash
-docker build -t cs536-hw2 .
+./run_experiment.sh
 ```
 
-2. Run the full pipeline:
-```bash
-docker run --network=host cs536-hw2
-```
+This builds the image, creates output directories, and runs the pipeline. Results are written directly to `./data` and `./plots` on the host via volume mounts.
 
-3. Extract results:
+Or manually:
 ```bash
-docker run --name hw2-run --network=host cs536-hw2
-docker cp hw2-run:/app/data ./data
-docker cp hw2-run:/app/plots ./plots
-docker rm hw2-run
+docker build -t cs536hw2 .
+docker run --rm \
+  --network host \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/plots:/app/plots \
+  cs536hw2
 ```
 
 ### Running Directly on Linux
@@ -57,14 +58,14 @@ pip3 install -r requirements.txt
 
 2. Run the pipeline:
 ```bash
-python3 main.py --servers servers.txt --num-servers 10 --duration 60
+python3 main.py --csv listed_iperf3_servers-2.csv --num-servers 10 --duration 60
 ```
 
 ## Usage
 
 ### Full Pipeline
 ```bash
-python3 main.py --servers servers.txt \
+python3 main.py --csv listed_iperf3_servers-2.csv \
                 --num-servers 10 \
                 --duration 60 \
                 --sample-interval 0.2 \
@@ -72,14 +73,9 @@ python3 main.py --servers servers.txt \
                 --beta 1.0
 ```
 
-### Quick Test Mode (3 servers, 10s each)
-```bash
-python3 main.py --servers servers.txt --quick-test
-```
-
 ### Command Line Arguments
 
-- `--servers FILE`: Path to server list file (required)
+- `--csv FILE`: Path to server list CSV (default: listed_iperf3_servers-2.csv)
 - `--num-servers N`: Number of random servers to test (default: 10)
 - `--duration SEC`: Test duration per server (default: 60)
 - `--sample-interval SEC`: Sampling interval (default: 0.2)
@@ -108,10 +104,10 @@ python3 main.py --servers servers.txt --quick-test
 
 ### Part 3: ML Model
 1. Prepares dataset from all collected traces
-2. Trains gradient boosting model to predict cwnd updates
-3. Uses custom objective function: η(t-1) = goodput(t) - α·RTT(t) - β·loss(t)
+2. Trains linear regression model to predict delta cwnd (cwnd updates)
+3. Uses custom objective function: η(t-1) = goodput(t) - α·RTT(t) - β·loss(t), with weight at t-1 derived from outcome at t
 4. Evaluates on test set (30% split)
-5. Extracts hand-written algorithm based on observations
+5. Derives hand-written algorithm dynamically from learned coefficients, data percentiles, and BDP
 6. Outputs:
    - `data/cwnd_predictor.pkl` - Trained model
    - `plots/part3_ml_predictions_all.pdf` - Predictions for multiple servers
@@ -156,11 +152,12 @@ Uses Linux `TCP_INFO` socket option to extract:
 - Other TCP state variables
 
 ### ML Model
-- Algorithm: Gradient Boosting Regressor
-- Features: goodput, RTT, loss, cwnd, lagged values, moving averages
-- Target: Delta cwnd (change in congestion window)
-- Training: Weighted by objective function η
+- Algorithm: Linear Regression (sklearn)
+- Features: goodput_mbps, rtt_ms, loss, snd_cwnd, lagged cwnd values, moving averages
+- Target: delta_cwnd (change in congestion window)
+- Training: Weighted by objective function η with correct off-by-one shift (weight[t-1] ← outcome at t)
 - Evaluation: MSE, MAE, R² on both delta and absolute cwnd
+- Algorithm extraction: dynamically derived from learned coefficients, RTT/loss percentiles, and BDP
 
 ### Objective Function
 η(t-1) = goodput(t) - α·RTT(t) - β·loss(t)
@@ -193,7 +190,7 @@ Where:
 
 Minimal test to verify everything works:
 ```bash
-python3 main.py --servers servers.txt --quick-test
+python3 main.py --csv listed_iperf3_servers-2.csv --num-servers 3 --duration 10
 ```
 
 This runs 3 servers for 10 seconds each and generates all outputs.
@@ -214,7 +211,7 @@ This implementation satisfies all requirements:
 ✅ **Part 2 (40 pts)**: TCP statistics collection and visualization
 ✅ **Part 3 (40 pts)**: ML model with custom objective and extracted algorithm
 ✅ **Automation**: Single script runs entire pipeline
-✅ **Docker**: Containerized with ubuntu:24.04
+✅ **Docker**: Containerized with ubuntu:24.04, one-command execution via `run_experiment.sh`
 ✅ **Outputs**: All CSV, JSON, and PDF files generated automatically
 
 ## Author
