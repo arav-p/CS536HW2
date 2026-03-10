@@ -1,0 +1,73 @@
+
+CONGESTION WINDOW UPDATE ALGORITHM
+(Extracted from fitted linear model)
+
+Objective function used during training:
+  η(t-1) = goodput(t) − 0.1·RTT(t) − 1.0·loss(t)
+
+═══════════════════════════════════════════════════════════════════
+SECTION 1 — LEARNED MODEL EQUATION
+═══════════════════════════════════════════════════════════════════
+  delta_cwnd = +16.90625
+            (+123.92756 × goodput_mbps)
+            (+1448.63302 × rtt_ms)
+            (-38.90674 × loss)
+            (-26.43390 × goodput_lag1)
+            (+39.85973 × rtt_lag1)
+            (-318.74656 × cwnd_lag1)
+            (-9.62719 × goodput_ma3)
+            (-1487.88637 × rtt_ma3)
+            (+145.47000 × snd_ssthresh)
+            (+268.05225 × unacked)
+            (+0.00000 × retransmits)
+
+═══════════════════════════════════════════════════════════════════
+SECTION 2 — DATA OBSERVATIONS
+═══════════════════════════════════════════════════════════════════
+  RTT:     min=7.51 ms  median=93.19 ms  p75=98.27 ms
+  cwnd:    median=3984.0 pkts  p75=3988.0 pkts
+  goodput: median=220.00 Mbps
+  BDP:     1769.9 packets  (goodput × RTT / MSS=1448B)
+
+  Pearson correlations with goodput:
+    cwnd ↔ goodput : +0.142
+    RTT  ↔ goodput : -0.766
+    loss ↔ goodput : -0.016
+
+═══════════════════════════════════════════════════════════════════
+SECTION 3 — DOMINANT FEATURES
+═══════════════════════════════════════════════════════════════════
+  • rtt_ma3 (coef=-1487.88637): rising RTT decreases delta_cwnd. RTT increase signals queue build-up.
+  • rtt_ms (coef=+1448.63302): rising RTT increases delta_cwnd. RTT increase signals queue build-up.
+  • cwnd_lag1 (coef=-318.74656): cwnd has strong momentum — autoregressive. A cwnd_lag1 ↑ decreases delta_cwnd.
+
+═══════════════════════════════════════════════════════════════════
+SECTION 4 — HAND-WRITTEN ALGORITHM
+═══════════════════════════════════════════════════════════════════
+
+Simplified Hand-Written Algorithm (derived from model observations)
+-------------------------------------------------------------------
+  queue_delay = rtt - rtt_min    # isolate queueing component
+
+  if loss > 0.0:
+    cwnd = max(2, cwnd × 0.5)                # AIMD multiplicative decrease
+
+  elif queue_delay > (rtt_min × 13.09):
+    cwnd = max(2, cwnd - 1)                  # Vegas-like delay decrease
+
+  elif cwnd < 1769.9:
+    cwnd = cwnd + 1                          # probe toward BDP target
+
+  else:
+    delta = -1487.88637 × rtt_ma3
+          delta += 1448.63302 × rtt_ms
+          delta += -318.74656 × cwnd_lag1
+    cwnd = max(2, cwnd + delta)
+
+  cwnd = max(2, min(cwnd, 65535))
+
+Grounding:
+  BDP = 1769.9 pkts — cwnd below this wastes bandwidth, above fills queues.
+  RTT_min = 7.51 ms — propagation baseline (5th pctile).
+  loss threshold = 0.0 (75th pctile of per-interval events).
+  Dominant signal: rtt_ma3 = -1487.88637

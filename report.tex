@@ -55,7 +55,7 @@ The client was implemented in Python using the socket library, following the iPe
     \item Server discovery from public iPerf3 server lists
 \end{itemize}
 
-Code location: \href{https://github.com/username/cs536hw2/blob/main/iperf_client.py}{iperf\_client.py}
+Code location: \href{https://github.com/arav-p/CS536HW2/blob/main/iperf_client.py}{iperf\_client.py}
 
 \subsection{TCP Statistics Extraction}
 
@@ -67,7 +67,7 @@ TCP statistics were extracted using Python's socket.getsockopt() with TCP\_INFO,
     \item Throughput measurements
 \end{itemize}
 
-Code location: \href{https://github.com/username/cs536hw2/blob/main/tcp_stats.py}{tcp\_stats.py}
+Code location: \href{https://github.com/arav-p/CS536HW2/blob/main/tcp_stats.py}{tcp\_stats.py}
 
 \subsection{ML Model Training}
 
@@ -79,13 +79,13 @@ A linear regression model was trained to predict congestion window changes ($\De
     \item Objective: $\eta = goodput - \alpha \cdot RTT - \beta \cdot loss$
 \end{itemize}
 
-Code location: \href{https://github.com/username/cs536hw2/blob/main/ml_model.py}{ml\_model.py}
+Code location: \href{https://github.com/arav-p/CS536HW2/blob/main/ml_model.py}{ml\_model.py}
 
 \subsection{Experimental Setup}
 
 Experiments were conducted on AWS EC2 (Ubuntu 24.04) to ensure Linux kernel compatibility. The Docker container standardizes the user-space environment while leveraging the host kernel for TCP statistics.
 
-Dockerfile: \href{https://github.com/username/cs536hw2/blob/main/Dockerfile}{Dockerfile}
+Dockerfile: \href{https://github.com/arav-p/CS536HW2/blob/main/Dockerfile}{Dockerfile}
 
 \section{Results}
 
@@ -99,7 +99,7 @@ The client successfully tested 10 servers out of 28 attempted, with automatic fa
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\textwidth]{plots_linux/plots/part1_throughput_timeseries.pdf}
+    \includegraphics[width=\textwidth]{plots/part1_throughput_timeseries.pdf}
     \caption{Throughput timeseries for all tested servers}
     \label{fig:throughput_timeseries}
 \end{figure}
@@ -137,17 +137,17 @@ Real-time TCP statistics were collected every 200ms during transmission, capturi
 \begin{figure}[H]
     \centering
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{plots_linux/plots/server_00_speedtest_netone_nl_tcp_timeseries.pdf}
+        \includegraphics[width=\textwidth]{plots/server_00_iperf_ams_nl_eranium_net_tcp_timeseries.pdf}
         \caption{Congestion window and RTT timeseries}
         \label{fig:tcp_timeseries}
     \end{subfigure}
     \hfill
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{plots_linux/plots/server_00_speedtest_netone_nl_scatter_plots.pdf}
+        \includegraphics[width=\textwidth]{plots/server_00_iperf_ams_nl_eranium_net_scatter_plots.pdf}
         \caption{Scatter plots: cwnd vs goodput, RTT vs goodput}
         \label{fig:scatter_plots}
     \end{subfigure}
-    \caption{TCP statistics for representative server (speedtest.netone.nl)}
+    \caption{TCP statistics for representative server (iperf.ams.nl.eranium.net)}
 \end{figure}
 
 \subsubsection{Key Observations}
@@ -228,7 +228,7 @@ The dominant signal is the near-equal and opposite pair \texttt{rtt\_ma3} ($-148
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\textwidth]{plots_linux/plots/server_00_speedtest_netone_nl_ml_predictions.pdf}
+    \includegraphics[width=\textwidth]{plots/server_00_iperf_ams_nl_eranium_net_ml_predictions.pdf}
     \caption{ML predictions vs actual cwnd evolution}
     \label{fig:ml_predictions}
 \end{figure}
