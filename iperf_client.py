@@ -25,6 +25,7 @@ class ThroughputSample:
     timestamp: float
     bytes_sent: int
     interval_bytes: int
+    bytes_acked: int          # FIX: track ack'd bytes separately
     goodput_mbps: float
     tcp_info: Optional[Dict] = None
 
@@ -67,6 +68,9 @@ class IPerf3Client:
         self.start_time = None
         self.running = False
         self._bytes_lock = threading.Lock()
+
+        # FIX: track previous unacked count to compute bytes_acked per interval
+        self._last_unacked = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -143,6 +147,7 @@ class IPerf3Client:
             self.start_time = time.time()
             self.total_bytes_sent = 0
             self.last_sample_bytes = 0
+            self._last_unacked = 0  # FIX: reset unacked tracker at test start
 
             # Step 6: Server sends TEST_START (byte 1)
             state = self._recv_state()
@@ -299,28 +304,23 @@ class IPerf3Client:
           Server  -> DISPLAY_RESULTS (14)
         """
         try:
-            # Close write side of data socket to signal end-of-stream
             try:
                 self.data_sock.shutdown(socket.SHUT_WR)
             except Exception as e:
                 logger.debug(f"data_sock shutdown: {e}")
 
-            # Send TEST_END on control channel
             if not self._send_state(self.TEST_END):
                 return
 
-            # Receive EXCHANGE_RESULTS from server
             state = self._recv_state()
             if state != self.EXCHANGE_RESULTS:
                 logger.warning(f"Expected EXCHANGE_RESULTS ({self.EXCHANGE_RESULTS}), got {state}")
                 return
 
-            # Receive server's JSON results
             server_results = self._recv_json(self.control_sock)
             if server_results:
                 logger.info(f"Server results: {json.dumps(server_results, indent=2)}")
 
-            # Send EXCHANGE_RESULTS + our own JSON results
             if not self._send_state(self.EXCHANGE_RESULTS):
                 return
 
@@ -330,7 +330,6 @@ class IPerf3Client:
             }
             self._send_json(self.control_sock, client_results)
 
-            # Receive DISPLAY_RESULTS
             state = self._recv_state()
             if state == self.DISPLAY_RESULTS:
                 logger.info("Test termination sequence complete")
@@ -359,15 +358,31 @@ class IPerf3Client:
 
             with self._bytes_lock:
                 current_total = self.total_bytes_sent
-            interval_bytes = current_total - self.last_sample_bytes
-            goodput_mbps = (interval_bytes * 8) / (elapsed * 1_000_000)
 
+            interval_bytes = current_total - self.last_sample_bytes
+
+            # FIX: get TCP info BEFORE computing goodput so we can use unacked
             tcp_info = self._get_tcp_info()
+
+            # FIX: compute bytes_acked using unacked delta from TCP_INFO
+            # bytes_acked = bytes handed to kernel - increase in unacked queue
+            # If unacked grows, those bytes left the app but haven't been ACK'd yet
+            if tcp_info and tcp_info.get('unacked') is not None:
+                curr_unacked = tcp_info['unacked']
+                unacked_delta = max(0, curr_unacked - self._last_unacked)
+                bytes_acked = max(0, interval_bytes - unacked_delta)
+                self._last_unacked = curr_unacked
+            else:
+                # Fallback: no TCP_INFO available (non-Linux), use sent bytes
+                bytes_acked = interval_bytes
+
+            goodput_mbps = (bytes_acked * 8) / (elapsed * 1_000_000)
 
             sample = ThroughputSample(
                 timestamp=current_time - self.start_time,
                 bytes_sent=current_total,
                 interval_bytes=interval_bytes,
+                bytes_acked=bytes_acked,
                 goodput_mbps=goodput_mbps,
                 tcp_info=tcp_info,
             )

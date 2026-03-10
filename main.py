@@ -29,9 +29,6 @@ def run_iperf_tests(num_servers: int, duration: int,
     """
     Test servers from the CSV until num_servers succeed.
     Automatically replaces servers that fail the probe or the iperf handshake.
-
-    Returns:
-        List of (server_id, results) tuples for successful tests
     """
     from server_discovery import load_from_csv, _is_reachable
     import random
@@ -43,10 +40,9 @@ def run_iperf_tests(num_servers: int, duration: int,
         return []
 
     random.shuffle(pool)
-    pool_iter = iter(pool)
-
+    pool_iter    = iter(pool)
     results_list = []
-    attempted = 0
+    attempted    = 0
     server_index = 0
 
     logger.info(f"Running iperf tests — need {num_servers} successful, will retry on failure")
@@ -61,7 +57,6 @@ def run_iperf_tests(num_servers: int, duration: int,
         attempted += 1
         label = f"{host}:{port}"
 
-        # Quick reachability probe before spending time on full test
         logger.info(f"Probing {label} ...")
         if not _is_reachable(host, port, timeout=5):
             logger.info(f"  unreachable, trying next server")
@@ -79,9 +74,10 @@ def run_iperf_tests(num_servers: int, duration: int,
             server_index += 1
             logger.info(f"✓ Success: {label} ({len(results_list)}/{num_servers})")
         else:
-            logger.warning(f"✗ Failed (ACCESS_DENIED or handshake error): {label}, trying replacement...")
+            logger.warning(f"✗ Failed: {label}, trying replacement...")
 
-    logger.info(f"\nCompleted: {len(results_list)}/{num_servers} successful out of {attempted} attempted")
+    logger.info(f"\nCompleted: {len(results_list)}/{num_servers} successful "
+                f"out of {attempted} attempted")
     return results_list
 
 
@@ -92,13 +88,11 @@ def save_and_visualize_part1(results_list: List[tuple], processor: TCPStatsProce
     logger.info("PART 1: Throughput Analysis")
     logger.info("="*60)
 
-    # Process all results
     for server_id, result in results_list:
         processor.process_test_results(result, server_id)
 
-    # Load all stats for visualization
     stats_dfs = {}
-    summaries = {}
+    summaries  = {}
 
     for server_id, _ in results_list:
         try:
@@ -108,12 +102,11 @@ def save_and_visualize_part1(results_list: List[tuple], processor: TCPStatsProce
         except Exception as e:
             logger.error(f"Error loading stats for {server_id}: {e}")
 
-    # Create visualizations
     if stats_dfs:
         viz.plot_throughput_timeseries(stats_dfs, "part1_throughput_timeseries.pdf")
         viz.plot_summary_table(summaries, "part1_summary_table.pdf")
 
-    logger.info("Part 1 complete: Results saved to data/ and plots/")
+    logger.info("Part 1 complete.")
 
 
 def analyze_tcp_stats_part2(results_list: List[tuple], processor: TCPStatsProcessor,
@@ -123,7 +116,6 @@ def analyze_tcp_stats_part2(results_list: List[tuple], processor: TCPStatsProces
     logger.info("PART 2: TCP Statistics Analysis")
     logger.info("="*60)
 
-    # Pick a representative destination (first successful one)
     if not results_list:
         logger.error("No successful tests for Part 2 analysis")
         return
@@ -131,27 +123,24 @@ def analyze_tcp_stats_part2(results_list: List[tuple], processor: TCPStatsProces
     server_id, _ = results_list[0]
     logger.info(f"Using {server_id} as representative destination")
 
-    # Load stats
     df = processor.load_stats(server_id)
 
-    # Add derived fields if missing
     if 'rtt_ms' not in df.columns:
         df['rtt_ms'] = df['rtt_us'] / 1000.0
     if 'loss' not in df.columns:
-        df['loss'] = df['retransmits'] + df['lost'] + df['retrans']
+        df['loss'] = (
+            df['retransmits'] + df['lost'] + df['retrans']
+        ).diff().fillna(0).clip(lower=0)
 
-    # Create visualizations
     viz.plot_tcp_metrics_timeseries(df, server_id)
     viz.plot_scatter_relationships(df, server_id)
 
-    # Print observations
     logger.info("\nTCP Metrics Observations:")
-    logger.info(f"  Avg Cwnd: {df['snd_cwnd'].mean():.1f} packets")
-    logger.info(f"  Avg RTT: {df['rtt_ms'].mean():.2f} ms")
-    logger.info(f"  Total losses: {df['loss'].sum():.0f}")
-    logger.info(f"  Avg Goodput: {df['goodput_mbps'].mean():.2f} Mbps")
-
-    logger.info("\nPart 2 complete: TCP analysis plots saved to plots/")
+    logger.info(f"  Avg Cwnd    : {df['snd_cwnd'].mean():.1f} packets")
+    logger.info(f"  Avg RTT     : {df['rtt_ms'].mean():.2f} ms")
+    logger.info(f"  Total losses: {df['loss'].sum():.0f} events")
+    logger.info(f"  Avg Goodput : {df['goodput_mbps'].mean():.2f} Mbps")
+    logger.info("Part 2 complete.")
 
 
 def train_ml_model_part3(results_list: List[tuple], processor: TCPStatsProcessor,
@@ -161,43 +150,34 @@ def train_ml_model_part3(results_list: List[tuple], processor: TCPStatsProcessor
     logger.info("PART 3: ML Model Training")
     logger.info("="*60)
 
-    # Prepare dataset from all servers
     server_ids = [sid for sid, _ in results_list]
-
     logger.info(f"Preparing ML dataset from {len(server_ids)} servers...")
+
     dataset = processor.prepare_ml_dataset(server_ids)
-
     logger.info(f"Dataset shape: {dataset.shape}")
-    logger.info(f"Features: {dataset.columns.tolist()}")
 
-    # Split train/test
     train_df, test_df = processor.split_train_test(dataset, test_split=0.3)
+    logger.info(f"Train: {len(train_df)} samples  |  Test: {len(test_df)} samples")
 
-    logger.info(f"Train samples: {len(train_df)}, Test samples: {len(test_df)}")
-
-    # Train model
+    # FIX: gradient_boosting as default (better accuracy, no leakage risk)
     predictor = CongestionWindowPredictor(alpha=alpha, beta=beta,
-                                          model_type='linear')
+                                          model_type='gradient_boosting')
 
     train_metrics = predictor.train(train_df)
     logger.info(f"Training metrics: {train_metrics}")
 
-    # Evaluate on test set
     test_metrics = predictor.evaluate(test_df)
     logger.info(f"Test metrics: {test_metrics}")
 
-    # Feature importance
     importance = predictor.get_feature_importance()
     logger.info("\nFeature Importance:")
     logger.info(importance.to_string(index=False))
 
-    # Save model
     model_path = Path("data") / "cwnd_predictor.pkl"
     predictor.save(str(model_path))
 
-    # Generate predictions for visualization
-    # Select up to 5 servers for plotting
-    plot_servers = server_ids[:5]
+    # Generate predictions for up to 5 servers
+    plot_servers    = server_ids[:5]
     results_for_plot = []
 
     for server_id in plot_servers:
@@ -205,32 +185,26 @@ def train_ml_model_part3(results_list: List[tuple], processor: TCPStatsProcessor
         split_idx = int(len(server_df) * 0.7)
 
         test_portion = server_df.iloc[split_idx:].copy()
-        predictions = predictor.predict_cwnd_sequence(test_portion)
+        predictions  = predictor.predict_cwnd_sequence(test_portion)
 
         results_for_plot.append({
-            'server_id': server_id,
-            'df': server_df,
+            'server_id':   server_id,
+            'df':          server_df,
             'predictions': predictions,
-            'split_idx': split_idx
+            'split_idx':   split_idx,
         })
 
-        # Individual plot
         viz.plot_ml_predictions(server_df, predictions, server_id, split_idx)
 
-    # Combined plot
     viz.plot_ml_predictions_multiple(results_for_plot, "part3_ml_predictions_all.pdf")
 
-    # Extract hand-written algorithm
-    algorithm = predictor.extract_algorithm(train_df, test_df)
-
-    # Save algorithm to file
+    algorithm      = predictor.extract_algorithm(train_df, test_df)
     algorithm_path = Path("data") / "extracted_algorithm.txt"
     with open(algorithm_path, 'w') as f:
         f.write(algorithm)
 
-    logger.info(f"\nExtracted algorithm saved to {algorithm_path}")
-    logger.info("\nPart 3 complete: ML model trained and algorithm extracted")
-
+    logger.info(f"Extracted algorithm saved to {algorithm_path}")
+    logger.info("Part 3 complete.")
     return algorithm
 
 
@@ -238,59 +212,43 @@ def main():
     parser = argparse.ArgumentParser(
         description='CS536 HW2: Automated iperf, TCP stats, and ML pipeline'
     )
-    parser.add_argument('--csv', type=str, default='listed_iperf3_servers-2.csv',
-                        help='Path to the iperf3 server list CSV (default: listed_iperf3_servers-2.csv)')
-    parser.add_argument('--num-servers', type=int, default=10,
-                        help='Number of random servers to test (default: 10)')
-    parser.add_argument('--duration', type=int, default=60,
-                        help='Test duration per server in seconds (default: 60)')
-    parser.add_argument('--sample-interval', type=float, default=0.2,
-                        help='Sampling interval in seconds (default: 0.2)')
-    parser.add_argument('--alpha', type=float, default=0.1,
-                        help='Alpha parameter for objective function (default: 0.1)')
-    parser.add_argument('--beta', type=float, default=1.0,
-                        help='Beta parameter for objective function (default: 1.0)')
+    parser.add_argument('--csv', type=str, default='listed_iperf3_servers-2.csv')
+    parser.add_argument('--num-servers', type=int, default=10)
+    parser.add_argument('--duration',    type=int, default=60)
+    parser.add_argument('--sample-interval', type=float, default=0.2)
+    parser.add_argument('--alpha', type=float, default=0.1)
+    parser.add_argument('--beta',  type=float, default=1.0)
     parser.add_argument('--quick-test', action='store_true',
                         help='Quick test mode: 3 servers, 10s duration')
-
     args = parser.parse_args()
 
-    # Quick test mode
     if args.quick_test:
         args.num_servers = 3
-        args.duration = 10
+        args.duration    = 10
         logger.info("QUICK TEST MODE: 3 servers, 10s duration")
 
-    # Initialize components
     processor = TCPStatsProcessor(output_dir="data")
-    viz = Visualizer(output_dir="plots")
+    viz       = Visualizer(output_dir="plots")
 
     results_list = run_iperf_tests(args.num_servers, args.duration,
                                    args.sample_interval, args.csv)
 
-    if len(results_list) == 0:
+    if not results_list:
         logger.error("No successful tests completed. Exiting.")
         sys.exit(1)
 
-    # Part 1: Visualize throughput
     save_and_visualize_part1(results_list, processor, viz)
-
-    # Part 2: TCP stats analysis
     analyze_tcp_stats_part2(results_list, processor, viz)
-
-    # Part 3: ML model
     algorithm = train_ml_model_part3(results_list, processor, viz,
-                                      args.alpha, args.beta)
+                                     args.alpha, args.beta)
 
     logger.info("\n" + "="*60)
-    logger.info("PIPELINE COMPLETE!")
+    logger.info("PIPELINE COMPLETE")
     logger.info("="*60)
-    logger.info("\nOutputs:")
-    logger.info("  - TCP stats (CSV/JSON): data/")
-    logger.info("  - Plots (PDF): plots/")
-    logger.info("  - ML model: data/cwnd_predictor.pkl")
-    logger.info("  - Algorithm: data/extracted_algorithm.txt")
-
+    logger.info("  TCP stats (CSV/JSON) : data/")
+    logger.info("  Plots (PDF)          : plots/")
+    logger.info("  ML model             : data/cwnd_predictor.pkl")
+    logger.info("  Algorithm            : data/extracted_algorithm.txt")
     logger.info("\n" + algorithm)
 
 
