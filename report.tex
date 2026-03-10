@@ -22,12 +22,32 @@
 }
 
 \title{CS536 HW2: TCP Congestion Control Analysis}
-\author{Pranay Nandkeolyar}
+\author{Pranay Nandkeolyar and Arav Popli}
 \date{March 6, 2026}
 
 \begin{document}
 
 \maketitle
+
+\section{Code Repository}
+
+All source code for this assignment is available at:
+
+\begin{center}
+    \url{https://github.com/arav-p/CS536HW2}
+\end{center}
+
+The repository contains the following files:
+\begin{itemize}
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/iperf_client.py}{\texttt{iperf\_client.py}} — iPerf3-compatible TCP client
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/tcp_stats.py}{\texttt{tcp\_stats.py}} — TCP statistics collection and processing
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/visualizations.py}{\texttt{visualizations.py}} — PDF plot generation
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/ml_model.py}{\texttt{ml\_model.py}} — Congestion window prediction model
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/server_discovery.py}{\texttt{server\_discovery.py}} — iPerf3 server selection from CSV
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/main.py}{\texttt{main.py}} — End-to-end pipeline orchestrator
+    \item \href{https://github.com/arav-p/CS536HW2/blob/main/Dockerfile}{\texttt{Dockerfile}} — Ubuntu 24.04 container for Linux TCP\_INFO access
+\end{itemize}
+
 
 \section{Introduction}
 
